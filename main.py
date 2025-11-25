@@ -1,4 +1,5 @@
 import os
+import csv
 from pathlib import Path
 from telethon import TelegramClient
 from dotenv import load_dotenv
@@ -35,6 +36,27 @@ class TelegramDownloader:
                 all_channels.append(ch)
         return all_channels
 
+    def get_download_mode_from_user(self) -> str:
+        """
+        Returns one of: 'text', 'media', 'all'
+        """
+        print("Select download mode:")
+        print("[1] Download only TEXT (.csv)")
+        print("[2] Download only MEDIA")
+        print("[3] Download ALL (text + media)")
+
+        while True:
+            choice = input("Enter choice [1-3] (or 0 to exit): ").strip()
+            if choice == "0":
+                return ""
+            if choice == "1":
+                return "text"
+            if choice == "2":
+                return "media"
+            if choice == "3":
+                return "all"
+            print("Invalid choice, please enter 1, 2, 3 or 0.")
+
     async def resolve_entity(self, raw: str):
         """
         Find channel/chat by:
@@ -61,7 +83,13 @@ class TelegramDownloader:
 
         raise ValueError(f'Cannot find any chat/channel with title or username matching "{raw}"')
 
-    async def dump_channel(self, channel_raw: str, limit: int = 100):
+    async def dump_channel(self, channel_raw: str, mode: str = "all", limit: int = 100):
+        """
+        mode:
+          - 'text'  -> only text in *.csv
+          - 'media' -> only media
+          - 'all'   -> media & text
+        """
         print(f"==> Resolving: {channel_raw} ...")
         entity = await self.resolve_entity(channel_raw)
 
@@ -69,20 +97,71 @@ class TelegramDownloader:
         channel_dir = self.directory / safe_name
         channel_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"==> Downloading messages into folder: {channel_dir}")
+        print(f"==> Downloading into folder: {channel_dir}")
+        if mode in ("text", "all"):
+            csv_path = channel_dir / f"{safe_name}.csv"
+            print(f"    -> text will be saved to: {csv_path}")
+        else:
+            csv_path = None
 
-        async for msg in self.client.iter_messages(entity, limit=limit):
-            text = (msg.text or "").replace("\n", " ")
-            print(f"[{msg.id}] {msg.date} | {text[:80]}")
+        csv_file = None
+        writer = None
 
-            if msg.media:
-                try:
-                    file_path = await self.client.download_media(msg, channel_dir)
-                    print(f"    -> media saved to: {file_path}")
-                except Exception as e:
-                    print(f"    !! media error: {e}")
+        try:
+            if csv_path:
+                csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+                writer = csv.writer(csv_file)
+
+                writer.writerow(["id", "date", "sender_id", "username", "text"])
+
+            async for msg in self.client.iter_messages(entity, limit=limit):
+                text = (msg.text or "").replace("\n", " ")
+                print(f"[{msg.id}] {msg.date} | {text[:80]}")
+
+                # ----- TEXT / CSV -----
+                if writer is not None and mode in ("text", "all"):
+                    try:
+                        sender_id = getattr(msg, "sender_id", None)
+
+                        # Take sender name
+                        username = ""
+                        try:
+                            sender = await msg.get_sender()
+                            if sender and getattr(sender, "username", None):
+                                username = sender.username
+                        except Exception as e:
+                            print(f"    !! get_sender error: {e}")
+
+                        writer.writerow(
+                            [
+                                msg.id,
+                                msg.date.isoformat() if msg.date else "",
+                                str(sender_id) if sender_id is not None else "",
+                                username,
+                                text,
+                            ]
+                        )
+                    except Exception as e:
+                        print(f"    !! csv write error: {e}")
+
+                # ----- MEDIA -----
+                if msg.media and mode in ("media", "all"):
+                    try:
+                        file_path = await self.client.download_media(msg, channel_dir)
+                        print(f"    -> media saved to: {file_path}")
+                    except Exception as e:
+                        print(f"    !! media error: {e}")
+
+        finally:
+            if csv_file is not None:
+                csv_file.close()
 
     async def main(self):
+        mode = self.get_download_mode_from_user()
+        if not mode:
+            print("No mode selected. Exiting.")
+            return
+
         channels = self.get_channels_from_user_input()
         if not channels:
             print("No channels entered. Exiting.")
@@ -90,7 +169,9 @@ class TelegramDownloader:
 
         for ch in channels:
             try:
-                await self.dump_channel(ch, limit=None)
+                # limit=None -> all messages
+                # if you configure limit 100 -> the script will get only 100 messages
+                await self.dump_channel(ch, mode=mode, limit=None)
             except Exception as e:
                 print(f"[ERROR] While processing '{ch}': {e}")
 
