@@ -34,6 +34,17 @@ It uses the official Telegram API via Telethon and allows you to download media 
   - t.me link  
   - Group title (for private groups)
 - Customizable download directory via `.env`.
+- Interactive menu allowing:
+  - Text-only export (.csv)
+  - Media-only download
+  - Full download (text + media)
+- CSV export including:
+  - message id
+  - timestamp
+  - sender_id
+  - sender username
+  - cleaned text
+
 
 ---
 
